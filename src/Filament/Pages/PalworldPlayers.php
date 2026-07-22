@@ -32,6 +32,9 @@ class PalworldPlayers extends Page implements HasTable
 
     public ?string $apiError = null;
 
+    /** Friendly reason the API is expectedly down ("Server not running"), or null. */
+    public ?string $offlineLabel = null;
+
     public static function getNavigationLabel(): string
     {
         return 'Palworld Players';
@@ -75,7 +78,13 @@ class PalworldPlayers extends Page implements HasTable
     {
         return $table
             ->heading(fn () => new \Illuminate\Support\HtmlString(
-                view('palworld-admin::components.live-indicator', ['error' => $this->apiError])->render()
+                view('palworld-admin::components.live-indicator', [
+                    'error' => $this->apiError,
+                    // computed directly (not just from loadPlayers) because the
+                    // heading renders before the records resolve - otherwise a
+                    // fresh page load shows green for one poll cycle
+                    'offline' => $this->offlineLabel ?? PalworldService::offlineLabel($this->getServer()),
+                ])->render()
             ))
             ->records(fn (): array => $this->loadPlayers())
             ->columns([
@@ -194,21 +203,30 @@ class PalworldPlayers extends Page implements HasTable
             ])
             ->poll('15s')
             ->paginated(false)
-            ->emptyStateIcon(TablerIcon::UserOff)
-            ->emptyStateHeading(fn () => $this->apiError ? 'Palworld REST API unreachable' : 'No players online')
-            ->emptyStateDescription(fn () => $this->apiError
-                ?? 'Players appear here as soon as they connect.');
+            ->emptyStateIcon(fn () => $this->offlineLabel ? TablerIcon::PlayerStop : TablerIcon::UserOff)
+            ->emptyStateHeading(fn () => $this->offlineLabel
+                ?? ($this->apiError ? 'Palworld REST API unreachable' : 'No players online'))
+            ->emptyStateDescription(fn () => $this->offlineLabel
+                ? 'Start the server to see and manage players.'
+                : ($this->apiError ?? 'Players appear here as soon as they connect.'));
     }
 
     /** @return array<string, array<string, mixed>> */
     protected function loadPlayers(): array
     {
         $this->apiError = null;
+        $this->offlineLabel = null;
 
         try {
             $players = $this->client()->players();
         } catch (PalworldApiException $e) {
-            $hint = PalworldService::allocationMismatchHint($this->getServer());
+            $server = $this->getServer();
+
+            if ($this->offlineLabel = PalworldService::offlineLabel($server)) {
+                return [];
+            }
+
+            $hint = PalworldService::allocationMismatchHint($server);
             $this->apiError = $hint ? $hint . ' (' . $e->getMessage() . ')' : $e->getMessage();
 
             return [];

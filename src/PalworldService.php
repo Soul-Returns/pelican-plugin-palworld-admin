@@ -2,6 +2,7 @@
 
 namespace Soul\PalworldAdmin;
 
+use App\Enums\ContainerStatus;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Soul\PalworldAdmin\Api\PalworldClient;
@@ -47,6 +48,27 @@ class PalworldService
             port: (int) ($variables[config('palworld-admin.variables.rest_api_port')] ?? 0) ?: (int) config('palworld-admin.default_port', 8212),
             adminPassword: (string) ($variables[config('palworld-admin.variables.admin_password')] ?? ''),
         );
+    }
+
+    /**
+     * Why the game is expectedly unreachable right now - or null if it should
+     * be reachable (container running / state unknown), in which case a
+     * connection failure is a real error worth showing.
+     */
+    public static function offlineLabel(Server $server): ?string
+    {
+        try {
+            $status = $server->retrieveStatus();
+        } catch (\Exception) {
+            return null;
+        }
+
+        return match ($status) {
+            ContainerStatus::Offline, ContainerStatus::Exited, ContainerStatus::Dead, ContainerStatus::Paused => 'Server not running',
+            ContainerStatus::Starting, ContainerStatus::Created, ContainerStatus::Restarting => 'Server is starting',
+            ContainerStatus::Stopping, ContainerStatus::Removing => 'Server is stopping',
+            default => null,
+        };
     }
 
     /**

@@ -1,9 +1,13 @@
 {{-- Live-refresh indicator: pulsating green dot + seconds since last Livewire
      render (each table poll re-renders this view, restamping data-ts).
-     $error (nullable string) switches to a static red dot. --}}
+     $offline (nullable string, e.g. "Server not running") shows a neutral gray
+     dot; $error (nullable string) switches to a static red dot. --}}
 <div style="display:flex;align-items:center;gap:.5rem;font-size:.75rem;font-weight:400;color:#9ca3af;"
      x-data="{ now: Date.now() }" x-init="setInterval(() => now = Date.now(), 1000)">
-    @if ($error ?? null)
+    @if ($offline ?? null)
+        <span style="display:inline-block;width:.5rem;height:.5rem;border-radius:9999px;background:#6b7280;flex:none;"></span>
+        <span>{{ strtolower($offline) }} &mdash; checking every 15s</span>
+    @elseif ($error ?? null)
         <span style="display:inline-block;width:.5rem;height:.5rem;border-radius:9999px;background:#ef4444;flex:none;"></span>
         <span>live refresh failing &mdash; retrying&hellip;</span>
     @else
