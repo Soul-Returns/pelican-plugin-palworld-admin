@@ -30,6 +30,19 @@ subuser permissions (`control.console` for player actions, `file.*` for settings
 
 ## Installation
 
+**Via the panel (recommended):** *Admin → Plugins → Import → From URL* and paste the
+zip from the [latest release](https://github.com/Soul-Returns/pelican-plugin-palworld-admin/releases/latest):
+
+```
+https://github.com/Soul-Returns/pelican-plugin-palworld-admin/releases/latest/download/palworld-admin.zip
+```
+
+(or download the zip and use *From File*). Then press **Install** on the imported
+plugin. Updates show up as a badge under *Admin → Plugins* when a new release is
+published.
+
+**Via git:**
+
 ```sh
 cd /var/www/pelican/plugins        # your panel's plugins directory
 git clone https://github.com/Soul-Returns/pelican-plugin-palworld-admin palworld-admin
@@ -38,7 +51,8 @@ php artisan p:plugin:install palworld-admin
 php artisan filament:optimize-clear
 ```
 
-The folder name **must** be `palworld-admin` (it has to match the plugin id).
+The folder name **must** be `palworld-admin` (it has to match the plugin id — the
+release zip is named accordingly, don't rename it when importing).
 
 ## Configuration
 

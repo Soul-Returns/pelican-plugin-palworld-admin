@@ -5,8 +5,8 @@
     "version": "1.0.0",
     "description": "Palworld server administration: live players, kick/ban, broadcasts and world settings via the official Palworld REST API",
     "category": "plugin",
-    "url": null,
-    "update_url": null,
+    "url": "https://github.com/Soul-Returns/pelican-plugin-palworld-admin",
+    "update_url": "https://github.com/Soul-Returns/pelican-plugin-palworld-admin/releases/latest/download/update.json",
     "namespace": "Soul\\PalworldAdmin",
     "class": "PalworldAdminPlugin",
     "panels": [

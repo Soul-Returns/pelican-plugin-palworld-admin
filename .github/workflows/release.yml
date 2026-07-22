@@ -1,0 +1,73 @@
+name: Release
+
+# Runs only when a version tag (v1.2.3) is pushed. Builds the plugin zip,
+# drafts a GitHub release with panel import instructions and uploads the
+# assets. The release stays a DRAFT until published manually - only then
+# does releases/latest/download/update.json advertise the new version to
+# installed panels.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The zip must be named palworld-admin.zip: the panel derives the
+      # plugin id from the zip filename on import.
+      - name: Verify plugin.json version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PLUGIN_VERSION="$(jq -r '.version' plugin.json)"
+          if [ "${TAG_VERSION}" != "${PLUGIN_VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match plugin.json version ${PLUGIN_VERSION}. Bump plugin.json before tagging."
+            exit 1
+          fi
+
+      - name: Build plugin zip
+        run: git archive --format=zip --prefix=palworld-admin/ --output=palworld-admin.zip "${GITHUB_REF_NAME}"
+
+      # Consumed by the panel via plugin.json update_url
+      # (releases/latest/download/update.json). "*" = any panel version.
+      - name: Build update.json
+        run: |
+          jq -n \
+            --arg version "${GITHUB_REF_NAME#v}" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/palworld-admin.zip" \
+            '{"palworld-admin": {"*": {"version": $version, "download_url": $url}}}' > update.json
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<EOF
+          ## Installing on a Pelican panel
+
+          **Fresh install** - in the panel go to *Admin → Plugins → Import*:
+          - *From File*: upload the \`palworld-admin.zip\` asset from this release, or
+          - *From URL*: paste
+            \`https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/palworld-admin.zip\`
+
+          Then press **Install** on the imported plugin. See the
+          [README](https://github.com/${GITHUB_REPOSITORY}#requirements) for egg
+          requirements (REST API variables) and the firewall setup for the REST port.
+
+          **Update** - panels with the plugin installed see an update badge under
+          *Admin → Plugins* once this release is published, and can update from there.
+          EOF
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" palworld-admin.zip update.json \
+            --draft \
+            --title "Palworld Admin ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes-file release-notes.md
