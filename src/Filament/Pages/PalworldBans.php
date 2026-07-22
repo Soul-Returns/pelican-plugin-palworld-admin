@@ -11,6 +11,7 @@ use Filament\Facades\Filament;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
+use Filament\Support\Enums\Size;
 use Filament\Pages\Page;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -144,12 +145,18 @@ class PalworldBans extends Page implements HasTable
                 Action::make('back_to_players')
                     ->label('Back to players')
                     ->icon(TablerIcon::Users)
-                    ->link()
+                    ->color('gray')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
                     ->url(fn () => PalworldPlayers::getUrl()),
                 Action::make('ban_by_id')
                     ->label('Ban by ID')
                     ->icon(TablerIcon::Ban)
                     ->color('danger')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
                     ->schema([
                         TextInput::make('userid')
                             ->label('User ID (e.g. steam_7656119…)')

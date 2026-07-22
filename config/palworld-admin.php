@@ -29,4 +29,10 @@ return [
      * root). Read via Wings; each line is "userId,playerUid".
      */
     'ban_list_path' => 'Pal/Saved/SaveGames/banlist.txt',
+
+    /*
+     * The game-shipped defaults file (server root) used by the settings
+     * page's reset-to-default actions.
+     */
+    'defaults_path' => 'DefaultPalWorldSettings.ini',
 ];

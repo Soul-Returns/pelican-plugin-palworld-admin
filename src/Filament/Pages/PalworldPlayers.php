@@ -10,6 +10,7 @@ use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
+use Filament\Support\Enums\Size;
 use Filament\Pages\Page;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -176,10 +177,16 @@ class PalworldPlayers extends Page implements HasTable
                     ->icon(TablerIcon::Ban)
                     ->color('danger')
                     ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
                     ->url(fn () => PalworldBans::getUrl()),
                 Action::make('announce')
                     ->label('Announce')
                     ->icon(TablerIcon::Speakerphone)
+                    ->color('info')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
                     ->schema([
                         Textarea::make('message')
                             ->label('Message')
@@ -195,6 +202,9 @@ class PalworldPlayers extends Page implements HasTable
                     ->label('Save world')
                     ->icon(TablerIcon::DeviceFloppy)
                     ->color('success')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
                     ->action(fn () => $this->run(
                         'save',
                         fn () => $this->client()->save(),

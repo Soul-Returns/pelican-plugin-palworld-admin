@@ -19,6 +19,7 @@ use Filament\Schemas\Components\Fieldset;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
+use Filament\Support\Enums\Size;
 use Soul\PalworldAdmin\PalworldService;
 use Soul\PalworldAdmin\Support\OptionSettings;
 
@@ -57,6 +58,24 @@ class PalworldWorldSettings extends ServerFormPage
     public ?string $awaitingTarget = null;
 
     public int $awaitingPolls = 0;
+
+    /** Game defaults from DefaultPalWorldSettings.ini, loaded lazily on first reset. */
+    public ?array $defaults = null;
+
+    /**
+     * @return array<string, string> world-configuration defaults (managed keys excluded)
+     *
+     * @throws \Exception when the defaults file cannot be read
+     */
+    protected function defaults(): array
+    {
+        return $this->defaults ??= array_diff_key(
+            OptionSettings::parseIni(
+                $this->fileRepository()->getContent(config('palworld-admin.defaults_path'), config('panel.files.max_edit_size'))
+            )->values,
+            self::PANEL_MANAGED_KEYS,
+        );
+    }
 
     private ?DaemonFileRepository $fileRepository = null;
 
@@ -170,6 +189,19 @@ class PalworldWorldSettings extends ServerFormPage
             'managed' => array_intersect_key($values, self::PANEL_MANAGED_KEYS),
             'options' => array_diff_key($values, self::PANEL_MANAGED_KEYS),
         ]);
+
+        try {
+            $this->defaults(); // preload so per-row reset buttons can dim when already at default
+        } catch (\Exception) {
+            // defaults file unreadable - reset buttons stay active, reset-all reports the error
+        }
+    }
+
+    protected function isAtDefault(string $key): bool
+    {
+        return $this->defaults !== null
+            && array_key_exists($key, $this->defaults)
+            && trim((string) ($this->data['options'][$key] ?? '')) === $this->defaults[$key];
     }
 
     public function form(Schema $schema): Schema
@@ -215,6 +247,7 @@ class PalworldWorldSettings extends ServerFormPage
             Action::make("add_setting{$suffix}")
                 ->button()
                 ->outlined()
+                ->size(Size::Medium)
                 ->label('Add setting')
                 ->icon(TablerIcon::Plus)
                 ->color('gray')
@@ -246,9 +279,25 @@ class PalworldWorldSettings extends ServerFormPage
 
                     Notification::make()->title("{$key} added")->body('Use "Save to file" to persist it.')->success()->send();
                 }),
+            Action::make("reset_all{$suffix}")
+                ->button()
+                ->outlined()
+                ->size(Size::Medium)
+                ->label('Reset all to defaults')
+                ->icon(TablerIcon::Restore)
+                ->color('warning')
+                ->requiresConfirmation()
+                ->modalHeading('Reset all world configuration to defaults?')
+                ->modalDescription('Every world-configuration value is replaced with the game default from '
+                    . config('palworld-admin.defaults_path') . ' and the file is saved immediately. '
+                    . 'Settings you added that are not part of the defaults are removed. '
+                    . 'Panel-managed settings are not affected.')
+                ->visible(fn () => $this->canEdit())
+                ->action(fn () => $this->resetAllToDefaults()),
             Action::make("save{$suffix}")
                 ->button()
                 ->outlined()
+                ->size(Size::Medium)
                 ->label('Save to file')
                 ->icon(TablerIcon::DeviceFloppy)
                 ->visible(fn () => $this->canEdit())
@@ -256,6 +305,7 @@ class PalworldWorldSettings extends ServerFormPage
             Action::make("stop_server{$suffix}")
                 ->button()
                 ->outlined()
+                ->size(Size::Medium)
                 ->label('Stop server to edit')
                 ->icon(TablerIcon::PlayerStop)
                 ->color('danger')
@@ -272,6 +322,7 @@ class PalworldWorldSettings extends ServerFormPage
             Action::make("start_server{$suffix}")
                 ->button()
                 ->outlined()
+                ->size(Size::Medium)
                 ->label('Start server')
                 ->icon(TablerIcon::PlayerPlay)
                 ->color('success')
@@ -297,7 +348,11 @@ class PalworldWorldSettings extends ServerFormPage
                 ->disabled()
                 ->dehydrated(false)
                 ->password(str_contains($key, 'Password'))
-                ->placeholder('not in file yet - added on next save')
+                // key present with an empty value is a normal state - only a
+                // truly absent key gets the "will be seeded" placeholder
+                ->placeholder(fn () => array_key_exists($key, (array) ($this->data['managed'] ?? []))
+                    ? null
+                    : 'not in file yet - added on next save')
                 ->hintIcon(TablerIcon::Lock, tooltip: "Overwritten on every server start from {$origin} - edit it there, not here.");
         })->values()->all();
     }
@@ -318,7 +373,33 @@ class PalworldWorldSettings extends ServerFormPage
                 ->label($key)
                 ->inlineLabel()
                 ->disabled(!$canUpdate)
-                ->suffixAction(
+                ->live(onBlur: true)
+                ->suffixActions([
+                    Action::make("reset-{$key}")
+                        ->icon(TablerIcon::ArrowBackUp)
+                        ->color('gray')
+                        ->tooltip(fn () => $this->isAtDefault($key) ? 'Already at the game default' : 'Reset to the game default')
+                        ->visible($canUpdate)
+                        ->disabled(fn () => $this->isAtDefault($key))
+                        ->action(function () use ($key) {
+                            try {
+                                $defaults = $this->defaults();
+                            } catch (\Exception $e) {
+                                Notification::make()->title('Could not read ' . config('palworld-admin.defaults_path'))->body($e->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            if (!array_key_exists($key, $defaults)) {
+                                Notification::make()->title("No game default known for {$key}")->warning()->send();
+
+                                return;
+                            }
+
+                            $this->data['options'][$key] = $defaults[$key];
+
+                            Notification::make()->title("{$key} reset to default")->body('Use "Save to file" to persist it.')->success()->send();
+                        }),
                     Action::make("remove-{$key}")
                         ->icon(TablerIcon::X)
                         ->color('danger')
@@ -331,8 +412,8 @@ class PalworldWorldSettings extends ServerFormPage
                             unset($this->data['options'][$key]);
 
                             Notification::make()->title("{$key} removed")->body('Use "Save to file" to persist it.')->success()->send();
-                        })
-                ))
+                        }),
+                ]))
             ->values()
             ->all();
     }
@@ -393,6 +474,60 @@ class PalworldWorldSettings extends ServerFormPage
                 }
             }
 
+        } catch (\Exception $e) {
+            Notification::make()->title('Failed to save settings')->body($e->getMessage())->danger()->send();
+
+            return;
+        }
+
+        $this->persist($ini, $options, $merged);
+    }
+
+    /**
+     * Reset-all: rebuild the tuple in the DEFAULTS-FILE order (a normal save
+     * preserves the current file order instead), carrying panel-managed values
+     * over from the current file.
+     */
+    protected function resetAllToDefaults(): void
+    {
+        abort_unless(user()?->can(SubuserPermission::FileUpdate, $this->getRecord()), 403);
+
+        if (!$this->serverStopped()) {
+            return;
+        }
+
+        try {
+            $ini = $this->readIni();
+            $options = OptionSettings::parseIni($ini);
+            $defaultsFull = OptionSettings::parseIni(
+                $this->fileRepository()->getContent(config('palworld-admin.defaults_path'), config('panel.files.max_edit_size'))
+            )->values;
+        } catch (\Exception $e) {
+            Notification::make()->title('Could not read ' . config('palworld-admin.defaults_path'))->body($e->getMessage())->danger()->send();
+
+            return;
+        }
+
+        $merged = [];
+        foreach ($defaultsFull as $key => $default) {
+            $merged[$key] = array_key_exists($key, self::PANEL_MANAGED_KEYS)
+                ? ($options->values[$key] ?? '')
+                : $default;
+        }
+        // managed keys the defaults file doesn't know (or that only exist in
+        // the current file) still need preserving/seeding
+        foreach (array_keys(self::PANEL_MANAGED_KEYS) as $key) {
+            if (!array_key_exists($key, $merged)) {
+                $merged[$key] = $options->values[$key] ?? '';
+            }
+        }
+
+        $this->persist($ini, $options, $merged);
+    }
+
+    private function persist(string $ini, OptionSettings $options, array $merged): void
+    {
+        try {
             $options->replaceValues($merged);
 
             $this->fileRepository()->putContent(self::SETTINGS_PATH, $options->applyToIni($ini));
