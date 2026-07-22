@@ -32,8 +32,18 @@ jobs:
             exit 1
           fi
 
+      # git archive respects .gitattributes export-ignore; the meta block is
+      # stripped from plugin.json because it holds the panel-managed install
+      # status - shipping "enabled" would bypass the panel's install step
+      # (which is what clears the Filament component caches).
       - name: Build plugin zip
-        run: git archive --format=zip --prefix=palworld-admin/ --output=palworld-admin.zip "${GITHUB_REF_NAME}"
+        run: |
+          mkdir -p build/palworld-admin
+          git archive "${GITHUB_REF_NAME}" | tar -x -C build/palworld-admin
+          jq 'del(.meta)' build/palworld-admin/plugin.json > build/plugin.json.tmp
+          mv build/plugin.json.tmp build/palworld-admin/plugin.json
+          (cd build && zip -qr ../palworld-admin.zip palworld-admin)
+          unzip -l palworld-admin.zip
 
       # Consumed by the panel via plugin.json update_url
       # (releases/latest/download/update.json). "*" = any panel version.
