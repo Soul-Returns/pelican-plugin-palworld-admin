@@ -74,6 +74,9 @@ class PalworldPlayers extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
+            ->heading(fn () => new \Illuminate\Support\HtmlString(
+                view('palworld-admin::components.live-indicator', ['error' => $this->apiError])->render()
+            ))
             ->records(fn (): array => $this->loadPlayers())
             ->columns([
                 TextColumn::make('name')

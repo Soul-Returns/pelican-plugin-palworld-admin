@@ -67,6 +67,9 @@ class PalworldBans extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
+            ->heading(fn () => new \Illuminate\Support\HtmlString(
+                view('palworld-admin::components.live-indicator', ['error' => $this->loadError])->render()
+            ))
             ->records(fn (): array => $this->loadBans())
             ->columns([
                 TextColumn::make('name')
