@@ -7,12 +7,15 @@ use App\Enums\SubuserPermission;
 use App\Enums\TablerIcon;
 use App\Facades\Activity;
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
 use App\Services\Nodes\NodeJWTService;
 use BackedEnum;
 use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Support\Enums\Size;
 use Filament\Pages\Page;
@@ -39,6 +42,93 @@ class PalworldPlayers extends Page implements HasTable
 
     /** Friendly reason the API is expectedly down ("Server not running"), or null. */
     public ?string $offlineLabel = null;
+
+    /** In-flight paltools request: {id, state: listing|filtering, polls}. */
+    public ?array $palExport = null;
+
+    /** Roster from the watcher's players.json (uid/name/pals/group_id). */
+    public ?array $palPlayers = null;
+
+    protected function paltoolsWrite(array $request): void
+    {
+        (new DaemonFileRepository())->setServer($this->getServer())
+            ->putContent('.paltools/request.json', json_encode($request));
+    }
+
+    /**
+     * Polled by the view every 3s while a paltools request is in flight.
+     * The watcher (palworld yolk image) answers via .paltools/status.json.
+     */
+    public function checkPalExport(): void
+    {
+        if (!$this->palExport) {
+            return;
+        }
+
+        if (++$this->palExport['polls'] > 60) {
+            $this->palExport = null;
+            Notification::make()->title('Pal export timed out')
+                ->body('No answer from the paltools watcher - is the server running on the Palworld yolk image (egg v9+)?')
+                ->danger()->send();
+
+            return;
+        }
+
+        $files = (new DaemonFileRepository())->setServer($this->getServer());
+
+        try {
+            $status = json_decode($files->getContent('.paltools/status.json', 65536), true);
+        } catch (\Exception) {
+            return; // not answered yet
+        }
+
+        if (!is_array($status) || ($status['id'] ?? null) !== $this->palExport['id'] || ($status['state'] ?? null) === 'running') {
+            return;
+        }
+
+        $state = $this->palExport['state'];
+        $this->palExport = null;
+
+        if ($status['state'] === 'error') {
+            Notification::make()->title('Pal export failed')->body($status['detail'] ?? 'unknown error')->danger()->send();
+
+            return;
+        }
+
+        if ($state === 'listing') {
+            try {
+                $roster = json_decode($files->getContent('.paltools/players.json', 1048576), true);
+            } catch (\Exception $e) {
+                Notification::make()->title('Could not read player list')->body($e->getMessage())->danger()->send();
+
+                return;
+            }
+
+            $this->palPlayers = $roster['players'] ?? [];
+
+            Notification::make()->title('Player list ready')
+                ->body('Pick the players to export in the dialog.')
+                ->success()->send();
+
+            // table header actions mount through the table, not the page
+            $this->mountTableAction('export_pals_choose');
+
+            return;
+        }
+
+        // filtering done -> hand the browser a signed download of the result
+        $server = $this->getServer();
+        $token = app(NodeJWTService::class)
+            ->setExpiresAt(CarbonImmutable::now()->addMinutes(15))
+            ->setScopes(NodeJwtScope::FileDownload)
+            ->setUser(user())
+            ->setClaims(['file_path' => $status['output'] ?? '.paltools/export/Level.filtered.sav', 'server_uuid' => $server->uuid])
+            ->handle($server->node, user()?->id . $server->uuid);
+
+        Activity::event('server:file.download')->property('file', 'paltools export')->log();
+
+        redirect()->away($server->node->getConnectionAddress() . '/download/file?token=' . $token->toString());
+    }
 
     public static function getNavigationLabel(): string
     {
@@ -214,6 +304,59 @@ class PalworldPlayers extends Page implements HasTable
                         fn () => $this->client()->save(),
                         'World saved.',
                     )),
+                Action::make('export_pals')
+                    ->label('Export Pals')
+                    ->icon(TablerIcon::Users)
+                    ->color('info')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
+                    ->visible(fn () => $this->palPlayers === null
+                        && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false)
+                        && PalworldService::offlineLabel($this->getServer()) === null)
+                    ->disabled(fn () => $this->palExport !== null)
+                    ->action(function () {
+                        $id = uniqid();
+                        $this->paltoolsWrite(['id' => $id, 'action' => 'list']);
+                        $this->palExport = ['id' => $id, 'state' => 'listing', 'polls' => 0];
+                    }),
+                Action::make('export_pals_choose')
+                    ->label('Export Pals')
+                    ->icon(TablerIcon::Users)
+                    ->color('info')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
+                    ->visible(fn () => $this->palPlayers !== null
+                        && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false))
+                    ->disabled(fn () => $this->palExport !== null)
+                    ->modalHeading('Export selected players\' Pals')
+                    ->modalDescription('Produces a filtered Level.sav containing only the selected players\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Filtering runs on the game node; the download starts automatically when ready.')
+                    ->schema([
+                        CheckboxList::make('players')
+                            ->label('Players')
+                            ->required()
+                            ->options(collect($this->palPlayers ?? [])->mapWithKeys(
+                                fn ($p) => [$p['uid'] => sprintf('%s (%d pals)', $p['name'], $p['pals'])]
+                            )->all())
+                            ->columns(2),
+                        Toggle::make('whole_guild')
+                            ->label('Whole guild(s) of the selected players - includes shared base pals'),
+                        Toggle::make('save_first')
+                            ->label('Save world first (freshest data)')
+                            ->default(true),
+                    ])
+                    ->modalSubmitActionLabel('Export')
+                    ->action(function (array $data) {
+                        $id = uniqid();
+                        $key = ($data['whole_guild'] ?? false) ? 'guilds_of' : 'players';
+                        $this->paltoolsWrite([
+                            'id' => $id, 'action' => 'filter',
+                            $key => array_values($data['players'] ?? []),
+                            'save_first' => (bool) ($data['save_first'] ?? true),
+                        ]);
+                        $this->palExport = ['id' => $id, 'state' => 'filtering', 'polls' => 0];
+                    }),
                 Action::make('export_save')
                     ->label('Export save')
                     ->icon(TablerIcon::FileDownload)
