@@ -23,4 +23,10 @@ return [
     'egg_name_matches' => ['palworld'],
 
     'http_timeout' => (int) env('PALWORLD_ADMIN_HTTP_TIMEOUT', 5),
+
+    /*
+     * Where the game maintains its local ban list (relative to the server
+     * root). Read via Wings; each line is "userId,playerUid".
+     */
+    'ban_list_path' => 'Pal/Saved/SaveGames/banlist.txt',
 ];

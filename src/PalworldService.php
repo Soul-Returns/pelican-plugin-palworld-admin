@@ -3,6 +3,7 @@
 namespace Soul\PalworldAdmin;
 
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
 use Soul\PalworldAdmin\Api\PalworldClient;
 use Soul\PalworldAdmin\Api\PalworldConnection;
 
@@ -69,6 +70,35 @@ class PalworldService
             config('palworld-admin.variables.rest_api_port'),
             $ports->isEmpty() ? 'none' : $ports->join(', '),
         );
+    }
+
+    /**
+     * Read the game's local ban list (banlist.txt) via Wings.
+     * Missing file = no bans yet.
+     *
+     * @return array<string, string> userId => playerUid
+     */
+    public static function readBanList(Server $server): array
+    {
+        try {
+            $content = (new DaemonFileRepository())
+                ->setServer($server)
+                ->getContent(config('palworld-admin.ban_list_path'), config('panel.files.max_edit_size'));
+        } catch (\Illuminate\Contracts\Filesystem\FileNotFoundException) {
+            return [];
+        }
+
+        $bans = [];
+        foreach (preg_split('/\R/', $content) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            [$userId, $playerUid] = array_pad(explode(',', $line, 2), 2, '');
+            $bans[$userId] = $playerUid;
+        }
+
+        return $bans;
     }
 
     /** @return array<string, string|null> env_variable => effective value */

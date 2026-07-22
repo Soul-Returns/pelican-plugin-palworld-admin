@@ -27,11 +27,26 @@ class OptionSettings
 
     public static function parseIni(string $ini): self
     {
-        if (!preg_match('/^\s*OptionSettings\s*=\s*\((.*)\)\s*$/m', $ini, $m)) {
-            return new self();
+        if (preg_match('/^\s*OptionSettings\s*=\s*\((.*)\)\s*$/m', $ini, $m)) {
+            return self::parseTuple($m[1]);
         }
 
-        return self::parseTuple($m[1]);
+        // Lenient fallback for corrupted/truncated lines (e.g. mangled by the
+        // config parser tool when a value contains ")"): salvage what is
+        // parseable so the user can inspect and repair it from the panel.
+        if (preg_match('/^\s*OptionSettings\s*=\s*\((.*)$/m', $ini, $m)) {
+            $tuple = rtrim($m[1], ") \t\r");
+
+            // An odd number of quotes (truncated value) makes the quote-aware
+            // comma split misread everything after the damage - rebalance.
+            if (substr_count($tuple, '"') % 2 === 1) {
+                $tuple .= '"';
+            }
+
+            return self::parseTuple($tuple);
+        }
+
+        return new self();
     }
 
     public static function parseTuple(string $tuple): self

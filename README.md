@@ -5,9 +5,13 @@ Adds Palworld administration pages to the [Pelican](https://pelican.dev) server 
 [Palworld REST API](https://docs.palworldgame.com/category/rest-api/):
 
 - **Palworld Players** — live player table (name, account, Steam ID, level, ping,
-  coordinates, building count) with kick/ban actions, unban, in-game announcements,
+  coordinates, building count) with kick/ban actions, in-game announcements,
   world save, and live server metrics (FPS, player count, in-game day, uptime).
   Auto-refreshes every 15 seconds.
+- **Palworld Bans** — the server's ban list (`banlist.txt`, read via Wings) enriched
+  with everything the plugin knew at ban time (name, account, level, last IP, reason,
+  who banned, when — bans issued outside the panel show as ID-only), with unban and
+  ban-by-ID actions.
 - **Palworld World Settings** — edit the `OptionSettings` values in
   `PalWorldSettings.ini` directly from the panel (via Wings), with a
   restart-to-apply action. Keys managed by panel startup variables are flagged.

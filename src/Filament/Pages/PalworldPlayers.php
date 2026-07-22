@@ -8,7 +8,6 @@ use App\Models\Server;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -18,6 +17,7 @@ use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Soul\PalworldAdmin\Api\PalworldApiException;
 use Soul\PalworldAdmin\Api\Player;
+use Soul\PalworldAdmin\Models\PalworldBan;
 use Soul\PalworldAdmin\PalworldService;
 
 class PalworldPlayers extends Page implements HasTable
@@ -133,11 +133,38 @@ class PalworldPlayers extends Page implements HasTable
                     ])
                     ->action(fn (array $data, array $record) => $this->run(
                         'ban',
-                        fn () => $this->client()->ban($record['userId'], $data['message'] ?: 'You have been banned.'),
+                        function () use ($data, $record) {
+                            $message = $data['message'] ?: 'You have been banned.';
+
+                            $this->client()->ban($record['userId'], $message);
+
+                            try {
+                                PalworldBan::updateOrCreate(
+                                    ['server_id' => $this->getServer()->id, 'user_id' => $record['userId']],
+                                    [
+                                        'name' => $record['name'],
+                                        'account_name' => $record['accountName'],
+                                        'player_id' => $record['playerId'],
+                                        'ip' => $record['ip'],
+                                        'level' => $record['level'],
+                                        'message' => $message,
+                                        'banned_by' => user()?->username,
+                                    ],
+                                );
+                            } catch (\Exception $e) {
+                                report($e); // ban succeeded; a ledger failure must not fail the action
+                            }
+                        },
                         $record['name'] . ' was banned.',
                     )),
             ])
             ->headerActions([
+                Action::make('banned_players')
+                    ->label('Banned players')
+                    ->icon(TablerIcon::Ban)
+                    ->color('danger')
+                    ->button()
+                    ->url(fn () => PalworldBans::getUrl()),
                 Action::make('announce')
                     ->label('Announce')
                     ->icon(TablerIcon::Speakerphone)
@@ -151,19 +178,6 @@ class PalworldPlayers extends Page implements HasTable
                         'announce',
                         fn () => $this->client()->announce($data['message']),
                         'Announcement sent.',
-                    )),
-                Action::make('unban')
-                    ->label('Unban')
-                    ->icon(TablerIcon::UserOff)
-                    ->schema([
-                        TextInput::make('userid')
-                            ->label('User ID (e.g. steam_7656119…)')
-                            ->required(),
-                    ])
-                    ->action(fn (array $data) => $this->run(
-                        'unban',
-                        fn () => $this->client()->unban(trim($data['userid'])),
-                        'Player unbanned.',
                     )),
                 Action::make('save_world')
                     ->label('Save world')

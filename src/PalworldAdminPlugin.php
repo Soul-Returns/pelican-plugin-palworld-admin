@@ -4,6 +4,7 @@ namespace Soul\PalworldAdmin;
 
 use Filament\Contracts\Plugin;
 use Filament\Panel;
+use Soul\PalworldAdmin\Filament\Pages\PalworldBans;
 use Soul\PalworldAdmin\Filament\Pages\PalworldPlayers;
 use Soul\PalworldAdmin\Filament\Pages\PalworldWorldSettings;
 
@@ -18,6 +19,7 @@ class PalworldAdminPlugin implements Plugin
     {
         $panel->pages([
             PalworldPlayers::class,
+            PalworldBans::class,
             PalworldWorldSettings::class,
         ]);
     }
