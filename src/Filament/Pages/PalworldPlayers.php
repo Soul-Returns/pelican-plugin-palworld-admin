@@ -191,7 +191,8 @@ class PalworldPlayers extends Page implements HasTable
         try {
             $players = $this->client()->players();
         } catch (PalworldApiException $e) {
-            $this->apiError = $e->getMessage();
+            $hint = PalworldService::allocationMismatchHint($this->getServer());
+            $this->apiError = $hint ? $hint . ' (' . $e->getMessage() . ')' : $e->getMessage();
 
             return [];
         }

@@ -48,6 +48,29 @@ class PalworldService
         );
     }
 
+    /**
+     * Human-readable hint when the configured REST API port has no matching
+     * allocation on the server - the most common cause of "unreachable",
+     * especially with multiple Palworld servers on one node.
+     */
+    public static function allocationMismatchHint(Server $server): ?string
+    {
+        $port = self::connectionFor($server)->port;
+        $ports = $server->allocations->pluck('port');
+
+        if ($ports->contains($port)) {
+            return null;
+        }
+
+        return sprintf(
+            'The REST API port %d (from the %s variable) is not allocated to this server (allocated ports: %s). '
+            . 'Add a matching allocation in the Network tab or correct the variable, then restart the server.',
+            $port,
+            config('palworld-admin.variables.rest_api_port'),
+            $ports->isEmpty() ? 'none' : $ports->join(', '),
+        );
+    }
+
     /** @return array<string, string|null> env_variable => effective value */
     private static function variables(Server $server): array
     {
