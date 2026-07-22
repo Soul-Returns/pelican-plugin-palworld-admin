@@ -95,6 +95,39 @@ class PalworldService
     }
 
     /**
+     * Path of the world's Level.sav (the file save-analysis tools like
+     * palbreed.com consume). World GUID comes from the live REST API when the
+     * server runs, otherwise from listing the SaveGames directory via Wings.
+     */
+    public static function worldSavePath(Server $server): ?string
+    {
+        $guid = null;
+
+        try {
+            $guid = self::clientFor($server)->info()['worldguid'] ?? null;
+        } catch (\Exception) {
+            // server not running - fall back to the filesystem
+        }
+
+        if (!$guid) {
+            try {
+                $entries = (new DaemonFileRepository())->setServer($server)->getDirectory('Pal/Saved/SaveGames/0');
+            } catch (\Exception) {
+                return null;
+            }
+
+            foreach ($entries as $entry) {
+                if ($entry['directory'] ?? false) {
+                    $guid = $entry['name'];
+                    break;
+                }
+            }
+        }
+
+        return $guid ? "Pal/Saved/SaveGames/0/{$guid}/Level.sav" : null;
+    }
+
+    /**
      * Read the game's local ban list (banlist.txt) via Wings.
      * Missing file = no bans yet.
      *

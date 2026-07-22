@@ -2,10 +2,14 @@
 
 namespace Soul\PalworldAdmin\Filament\Pages;
 
+use App\Enums\NodeJwtScope;
 use App\Enums\SubuserPermission;
 use App\Enums\TablerIcon;
+use App\Facades\Activity;
 use App\Models\Server;
+use App\Services\Nodes\NodeJWTService;
 use BackedEnum;
+use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Textarea;
@@ -210,6 +214,53 @@ class PalworldPlayers extends Page implements HasTable
                         fn () => $this->client()->save(),
                         'World saved.',
                     )),
+                Action::make('export_save')
+                    ->label('Export save')
+                    ->icon(TablerIcon::FileDownload)
+                    ->color('gray')
+                    ->button()
+                    ->outlined()
+                    ->size(Size::Medium)
+                    ->visible(fn () => user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false)
+                    ->requiresConfirmation()
+                    ->modalHeading('Export world save (Level.sav)')
+                    ->modalDescription('Downloads this world\'s Level.sav from the node - usable e.g. with '
+                        . 'palbreed.com/breeding-path ("Choose Level.sav instead") to plan breeding routes from '
+                        . 'your actual Pals; that site reads the file locally in your browser, nothing is uploaded. '
+                        . 'The file is only as fresh as the last world save: press "Save world" first and wait a '
+                        . 'few seconds if you need current data.')
+                    ->modalSubmitActionLabel('Download')
+                    ->action(function (NodeJWTService $jwtService) {
+                        $server = $this->getServer();
+
+                        abort_unless(user()?->can(SubuserPermission::FileReadContent, $server), 403);
+
+                        $path = PalworldService::worldSavePath($server);
+
+                        if (!$path) {
+                            Notification::make()
+                                ->title('Could not locate Level.sav')
+                                ->body('No world found under Pal/Saved/SaveGames/0 - has the server run at least once?')
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
+
+                        $token = $jwtService
+                            ->setExpiresAt(CarbonImmutable::now()->addMinutes(15))
+                            ->setScopes(NodeJwtScope::FileDownload)
+                            ->setUser(user())
+                            ->setClaims([
+                                'file_path' => $path,
+                                'server_uuid' => $server->uuid,
+                            ])
+                            ->handle($server->node, user()?->id . $server->uuid);
+
+                        Activity::event('server:file.download')->property('file', $path)->log();
+
+                        redirect()->away($server->node->getConnectionAddress() . '/download/file?token=' . $token->toString());
+                    }),
             ])
             ->poll('15s')
             ->paginated(false)
