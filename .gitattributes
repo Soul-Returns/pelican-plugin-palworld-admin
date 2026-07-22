@@ -1,4 +1,8 @@
-# Keep CI/repo plumbing out of the release zip (git archive honors these)
+# Keep CI/repo plumbing and dev tooling out of the release zip
+# (git archive honors these; the release workflow uses git archive)
 .github/ export-ignore
 .gitattributes export-ignore
 .gitignore export-ignore
+dev/ export-ignore
+CLAUDE.md export-ignore
+DEVELOPMENT.md export-ignore
