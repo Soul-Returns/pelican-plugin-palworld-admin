@@ -1,12 +1,9 @@
 <x-filament-panels::page>
+    {{-- invisible fallback poller: keeps an in-flight pal export finishing
+         (download / state cleanup) if the modal - which carries the visible
+         spinner and its own poll - was dismissed early --}}
     @if ($this->palExport)
-        <div wire:poll.3s="checkPalExport"
-             style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:#9ca3af;">
-            <x-filament::loading-indicator style="height:1.25rem;width:1.25rem;flex:none;" />
-            <span>{{ $this->palExport['state'] === 'listing'
-                ? 'Reading world save on the node - the selection dialog opens when ready...'
-                : 'Filtering pals on the node (world save included) - the download starts when ready...' }}</span>
-        </div>
+        <div wire:poll.3s="checkPalExport"></div>
     @endif
 
     {{ $this->table }}

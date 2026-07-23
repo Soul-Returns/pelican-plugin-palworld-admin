@@ -17,7 +17,10 @@ use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Html;
 use Filament\Support\Enums\Size;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\HtmlString;
 use Filament\Pages\Page;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -66,6 +69,7 @@ class PalworldPlayers extends Page implements HasTable
         }
 
         if (++$this->palExport['polls'] > 60) {
+            $this->closePalExportModal();
             $this->palExport = null;
             Notification::make()->title('Pal export timed out')
                 ->body('No answer from the paltools watcher - is the server running on the Palworld yolk image (egg v9+)?')
@@ -90,6 +94,7 @@ class PalworldPlayers extends Page implements HasTable
         $this->palExport = null;
 
         if ($status['state'] === 'error') {
+            $this->closePalExportModal();
             Notification::make()->title('Pal export failed')->body($status['detail'] ?? 'unknown error')->danger()->send();
 
             return;
@@ -99,24 +104,27 @@ class PalworldPlayers extends Page implements HasTable
             try {
                 $roster = json_decode($files->getContent('.paltools/players.json', 1048576), true);
             } catch (\Exception $e) {
+                $this->closePalExportModal();
                 Notification::make()->title('Could not read player list')->body($e->getMessage())->danger()->send();
 
                 return;
             }
 
+            // The selection modal is already open (mounted on click) and shows a
+            // spinner while $palPlayers is null - setting it swaps in the list.
             $this->palPlayers = $roster['players'] ?? [];
 
-            Notification::make()->title('Player list ready')
-                ->body('Pick the players to export in the dialog.')
-                ->success()->send();
-
-            // table header actions mount through the table, not the page
-            $this->mountTableAction('export_pals_choose');
+            // poll responses are partial renders while a modal is open - without
+            // this the modal keeps showing the spinner and the page the banner
+            $this->forceRender();
 
             return;
         }
 
-        // filtering done -> hand the browser a signed download of the result
+        // filtering done -> close the modal and hand the browser a signed
+        // download of the result
+        $this->closePalExportModal();
+
         $server = $this->getServer();
         $token = app(NodeJWTService::class)
             ->setExpiresAt(CarbonImmutable::now()->addMinutes(15))
@@ -128,6 +136,33 @@ class PalworldPlayers extends Page implements HasTable
         Activity::event('server:file.download')->property('file', 'paltools export')->log();
 
         redirect()->away($server->node->getConnectionAddress() . '/download/file?token=' . $token->toString());
+    }
+
+    /**
+     * Spinner row for the export modal. Carries its own wire:poll: modal
+     * open/close are PARTIAL renders in Filament v5 (only the modal island),
+     * so a wire:poll in the page blade never (re)renders while a modal is
+     * involved - polling has to live inside the modal.
+     */
+    protected function palExportSpinner(string $text): HtmlString
+    {
+        return new HtmlString(
+            '<div wire:poll.2s="checkPalExport" style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:#9ca3af;">'
+            . Blade::render('<x-filament::loading-indicator style="height:1.25rem;width:1.25rem;flex:none;" />')
+            . '<span>' . e($text) . '</span></div>'
+        );
+    }
+
+    /** Close the selection modal if it is still open (e.g. the list request failed). */
+    protected function closePalExportModal(): void
+    {
+        try {
+            $this->unmountTableAction();
+        } catch (\Throwable) {
+            // nothing mounted - the user already dismissed the modal
+        }
+
+        $this->forceRender();
     }
 
     public static function getNavigationLabel(): string
@@ -311,14 +346,19 @@ class PalworldPlayers extends Page implements HasTable
                     ->button()
                     ->outlined()
                     ->size(Size::Medium)
-                    ->visible(fn () => $this->palPlayers === null
+                    ->visible(fn () => $this->palPlayers === null && $this->palExport === null
                         && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false)
                         && PalworldService::offlineLabel($this->getServer()) === null)
-                    ->disabled(fn () => $this->palExport !== null)
                     ->action(function () {
                         $id = uniqid();
                         $this->paltoolsWrite(['id' => $id, 'action' => 'list']);
                         $this->palExport = ['id' => $id, 'state' => 'listing', 'polls' => 0];
+                        // Replace this button action with the selection modal right
+                        // away - it shows a spinner until the watcher's roster
+                        // arrives. Pop ourselves off the mount stack first; the v5
+                        // replaceMountedTableAction() shim no longer does that.
+                        $this->unmountTableAction(false);
+                        $this->mountTableAction('export_pals_choose');
                     }),
                 Action::make('export_pals_choose')
                     ->label('Export Pals')
@@ -327,27 +367,45 @@ class PalworldPlayers extends Page implements HasTable
                     ->button()
                     ->outlined()
                     ->size(Size::Medium)
-                    ->visible(fn () => $this->palPlayers !== null
+                    ->visible(fn () => ($this->palPlayers !== null || ($this->palExport['state'] ?? null) === 'listing')
                         && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false))
-                    ->disabled(fn () => $this->palExport !== null)
+                    // NOT disabled while listing: a disabled action refuses to mount
+                    // (mountAction pops it silently), and the modal must open with a
+                    // spinner while the roster loads
+                    ->disabled(fn () => ($this->palExport['state'] ?? null) === 'filtering')
                     ->modalHeading('Export selected players\' Pals')
                     ->modalDescription('Produces a filtered Level.sav containing only the selected players\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Filtering runs on the game node; the download starts automatically when ready.')
+                    ->closeModalByClickingAway(false)
                     ->schema([
+                        Html::make(fn () => $this->palExportSpinner(
+                            'Reading world save on the node - this can take a moment on large worlds...'
+                        ))->visible(fn () => $this->palPlayers === null),
+                        Html::make(fn () => $this->palExportSpinner(
+                            'Filtering pals on the node (world save included) - the download starts when ready...'
+                        ))->visible(fn () => ($this->palExport['state'] ?? null) === 'filtering'),
                         CheckboxList::make('players')
                             ->label('Players')
                             ->required()
-                            ->options(collect($this->palPlayers ?? [])->mapWithKeys(
+                            ->options(fn () => collect($this->palPlayers ?? [])->mapWithKeys(
                                 fn ($p) => [$p['uid'] => sprintf('%s (%d pals)', $p['name'], $p['pals'])]
                             )->all())
-                            ->columns(2),
+                            ->columns(2)
+                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
                         Toggle::make('whole_guild')
-                            ->label('Whole guild(s) of the selected players - includes shared base pals'),
+                            ->label('Whole guild(s) of the selected players - includes shared base pals')
+                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
                         Toggle::make('save_first')
                             ->label('Save world first (freshest data)')
-                            ->default(true),
+                            ->default(true)
+                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
                     ])
                     ->modalSubmitActionLabel('Export')
-                    ->action(function (array $data) {
+                    ->modalSubmitAction(fn ($action) => $action->disabled($this->palPlayers === null || $this->palExport !== null))
+                    ->action(function (array $data, Action $action) {
+                        if ($this->palPlayers === null || $this->palExport !== null) {
+                            $action->halt(); // still loading/filtering - Export is disabled, this is just a guard
+                        }
+
                         $id = uniqid();
                         $key = ($data['whole_guild'] ?? false) ? 'guilds_of' : 'players';
                         $this->paltoolsWrite([
@@ -356,6 +414,12 @@ class PalworldPlayers extends Page implements HasTable
                             'save_first' => (bool) ($data['save_first'] ?? true),
                         ]);
                         $this->palExport = ['id' => $id, 'state' => 'filtering', 'polls' => 0];
+
+                        // keep the modal open - it now shows the filtering status,
+                        // and checkPalExport() closes it when the download starts
+                        // (halt skips the render hooks, so force the repaint)
+                        $this->forceRender();
+                        $action->halt();
                     }),
                 Action::make('export_save')
                     ->label('Export save')

@@ -80,3 +80,8 @@ seeded dev server). `dev/mock-palworld-api.py` fakes the game's REST API on
 :8212 (`admin`/`devpassword`) for UI work without a game server. PHP changes
 apply on reload; after config file changes run `php artisan config:clear` in
 the panel container.
+
+Browser-automation (Playwright) testing of the panel UI is possible against
+the dev stack, but the maintainer tests UI changes in their own browser -
+only reach for Playwright when they ask for it or a bug genuinely can't be
+diagnosed without it.
