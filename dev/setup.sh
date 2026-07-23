@@ -113,7 +113,7 @@ tags:
   - palworld
 features: []
 docker_images:
-  'SteamCMD Debian': 'ghcr.io/parkervcp/steamcmd:debian'
+  'Palworld Yolk': 'ghcr.io/soul-returns/yolks:palworld'
 file_denylist: []
 startup_commands:
   Default: 'echo dev-egg-ready && sleep infinity'
