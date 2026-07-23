@@ -259,9 +259,29 @@ EOF
 echo "==> starting panel (localhost:${PANEL_PORT}) ..."
 compose up -d panel
 
-echo -n "==> waiting for panel (first boot runs migrations, can take a minute)"
+# The panel image only runs migrations when APP_INSTALLED=true; a fresh volume
+# gets APP_INSTALLED=false and expects the web installer, so the database would
+# never be created. Migrate ourselves and mark the panel installed.
+echo -n "==> bootstrapping database (bypasses the web installer)"
+booted=0
+for _ in $(seq 1 60); do
+    if compose exec -T panel grep -q '^APP_INSTALLED=' /pelican-data/.env 2>/dev/null; then
+        booted=1
+        break
+    fi
+    echo -n .
+    sleep 2
+done
+echo
+[ "${booted}" = "1" ] || { echo "panel container did not boot - check: (cd dev/stack && docker compose logs panel)" >&2; exit 1; }
+if ! compose exec -T panel grep -q '^APP_INSTALLED=true' /pelican-data/.env; then
+    artisan migrate --force >/dev/null
+    compose exec -T panel sed -i 's/^APP_INSTALLED=false/APP_INSTALLED=true/' /pelican-data/.env
+fi
+
+echo -n "==> waiting for panel"
 ready=0
-for _ in $(seq 1 90); do
+for _ in $(seq 1 60); do
     if curl -sf -o /dev/null "http://localhost:${PANEL_PORT}/login" \
         && artisan tinker --execute='echo Illuminate\Support\Facades\Schema::hasTable("users") ? "ready" : "not-yet";' 2>/dev/null | grep -q ready; then
         ready=1
