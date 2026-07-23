@@ -2,7 +2,7 @@
     "id": "palworld-admin",
     "name": "Palworld Admin",
     "author": "soul",
-    "version": "1.5.2",
+    "version": "1.5.3",
     "description": "Palworld server administration: live players, kick/ban, broadcasts and world settings via the official Palworld REST API",
     "category": "plugin",
     "url": "https://github.com/Soul-Returns/pelican-plugin-palworld-admin",
