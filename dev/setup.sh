@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
     profiles: ["wings"]
     ports:
-      - "8080:8080"   # daemon api + browser websocket
+      - "8889:8889"   # daemon api + browser websocket (8080 clashes on this host)
       - "2022:2022"   # sftp
     tty: true
     environment:
@@ -200,11 +200,13 @@ if (!$node) {
         'cpu' => 0, 'cpu_overallocate' => 0,
         'daemon_token_id' => Str::random(16),
         'daemon_token' => Str::random(64),
-        'daemon_listen' => 8080, 'daemon_sftp' => 2022, 'daemon_connect' => 8080,
+        'daemon_listen' => 8889, 'daemon_sftp' => 2022, 'daemon_connect' => 8889,
         'daemon_base' => '/var/lib/pelican/volumes',
     ])->saveQuietly();
     echo "node: created\n";
 }
+// Keep the daemon port in sync on re-runs (host 8080 clashes -> wings uses 8889).
+$node->forceFill(['daemon_listen' => 8889, 'daemon_connect' => 8889])->saveQuietly();
 
 if (Server::query()->count() > 0) {
     echo "server: already seeded\n";
@@ -311,7 +313,9 @@ artisan filament:optimize-clear >/dev/null 2>&1 || true
 echo "==> seeding egg / node / dev server ..."
 compose cp "${EGG_FILE}" panel:/tmp/dev-egg.yaml
 compose cp "${STACK_DIR}/seed.php" panel:/tmp/dev-seed.php
-artisan tinker /tmp/dev-seed.php
+# `tinker <file>` includes the file and then opens the interactive REPL; feed it
+# /dev/null so the REPL hits EOF and exits instead of blocking on a live terminal.
+artisan tinker /tmp/dev-seed.php </dev/null
 SERVERS=$(artisan tinker --execute='echo App\Models\Server::query()->count();' | tr -cd '0-9')
 [ "${SERVERS:-0}" -ge 1 ] || { echo "seeding failed - inspect: (cd dev/stack && docker compose exec panel php artisan tinker /tmp/dev-seed.php)" >&2; exit 1; }
 
