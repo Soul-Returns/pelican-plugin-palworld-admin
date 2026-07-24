@@ -7,22 +7,14 @@ use App\Enums\SubuserPermission;
 use App\Enums\TablerIcon;
 use App\Facades\Activity;
 use App\Models\Server;
-use App\Repositories\Daemon\DaemonFileRepository;
 use App\Services\Nodes\NodeJWTService;
 use BackedEnum;
 use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Textarea;
-use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
-use Filament\Schemas\Components\Html;
-use Filament\Schemas\Components\Tabs;
-use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Support\Enums\Size;
-use Illuminate\Support\Facades\Blade;
-use Illuminate\Support\HtmlString;
 use Filament\Pages\Page;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -48,127 +40,25 @@ class PalworldPlayers extends Page implements HasTable
     /** Friendly reason the API is expectedly down ("Server not running"), or null. */
     public ?string $offlineLabel = null;
 
-    /** In-flight paltools request: {id, state: listing|filtering, polls}. */
-    public ?array $palExport = null;
-
-    /** Roster from the watcher's players.json (uid/name/pals/group_id). */
-    public ?array $palPlayers = null;
-
-    /** Guilds from the watcher's players.json (id/members/pals/ownerless/base_pals). */
-    public ?array $palGuilds = null;
-
-    protected function paltoolsWrite(array $request): void
-    {
-        (new DaemonFileRepository())->setServer($this->getServer())
-            ->putContent('.paltools/request.json', json_encode($request));
-    }
-
     /**
-     * Polled by the view every 3s while a paltools request is in flight.
-     * The watcher (palworld yolk image) answers via .paltools/status.json.
+     * Called by the client-side Pal export (modal Alpine component) before it
+     * downloads the world save. Best effort - returns whether a save happened.
      */
-    public function checkPalExport(): void
+    public function palSaveWorld(): bool
     {
-        if (!$this->palExport) {
-            return;
-        }
-
-        if (++$this->palExport['polls'] > 60) {
-            $this->closePalExportModal();
-            $this->palExport = null;
-            Notification::make()->title('Pal export timed out')
-                ->body('No answer from the paltools watcher - is the server running on the Palworld yolk image (egg v9+)?')
-                ->danger()->send();
-
-            return;
-        }
-
-        $files = (new DaemonFileRepository())->setServer($this->getServer());
-
-        try {
-            $status = json_decode($files->getContent('.paltools/status.json', 65536), true);
-        } catch (\Exception) {
-            return; // not answered yet
-        }
-
-        if (!is_array($status) || ($status['id'] ?? null) !== $this->palExport['id'] || ($status['state'] ?? null) === 'running') {
-            return;
-        }
-
-        $state = $this->palExport['state'];
-        $this->palExport = null;
-
-        if ($status['state'] === 'error') {
-            $this->closePalExportModal();
-            Notification::make()->title('Pal export failed')->body($status['detail'] ?? 'unknown error')->danger()->send();
-
-            return;
-        }
-
-        if ($state === 'listing') {
-            try {
-                $roster = json_decode($files->getContent('.paltools/players.json', 1048576), true);
-            } catch (\Exception $e) {
-                $this->closePalExportModal();
-                Notification::make()->title('Could not read player list')->body($e->getMessage())->danger()->send();
-
-                return;
-            }
-
-            // The selection modal is already open (mounted on click) and shows a
-            // spinner while $palPlayers is null - setting it swaps in the list.
-            $this->palPlayers = $roster['players'] ?? [];
-            $this->palGuilds = $roster['guilds'] ?? [];
-
-            // poll responses are partial renders while a modal is open - without
-            // this the modal keeps showing the spinner and the page the banner
-            $this->forceRender();
-
-            return;
-        }
-
-        // filtering done -> close the modal and hand the browser a signed
-        // download of the result
-        $this->closePalExportModal();
-
         $server = $this->getServer();
-        $token = app(NodeJWTService::class)
-            ->setExpiresAt(CarbonImmutable::now()->addMinutes(15))
-            ->setScopes(NodeJwtScope::FileDownload)
-            ->setUser(user())
-            ->setClaims(['file_path' => $status['output'] ?? '.paltools/export/Level.filtered.sav', 'server_uuid' => $server->uuid])
-            ->handle($server->node, user()?->id . $server->uuid);
 
-        Activity::event('server:file.download')->property('file', 'paltools export')->log();
-
-        redirect()->away($server->node->getConnectionAddress() . '/download/file?token=' . $token->toString());
-    }
-
-    /**
-     * Spinner row for the export modal. Carries its own wire:poll: modal
-     * open/close are PARTIAL renders in Filament v5 (only the modal island),
-     * so a wire:poll in the page blade never (re)renders while a modal is
-     * involved - polling has to live inside the modal.
-     */
-    protected function palExportSpinner(string $text): HtmlString
-    {
-        return new HtmlString(
-            '<div wire:poll.2s="checkPalExport" style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:#9ca3af;">'
-            . Blade::render('<x-filament::loading-indicator style="height:1.25rem;width:1.25rem;flex:none;" />')
-            . '<span>' . e($text) . '</span></div>'
-        );
-    }
-
-    /** Close the selection modal if it is still open (e.g. the list request failed). */
-    protected function closePalExportModal(): void
-    {
-        try {
-            $this->unmountTableAction();
-        } catch (\Throwable) {
-            // nothing mounted - the user already dismissed the modal
+        if (!user()?->can(SubuserPermission::ControlConsole, $server)) {
+            return false;
         }
 
-        $this->forceRender();
+        try {
+            $this->client()->save();
+        } catch (\Exception) {
+            return false; // server stopped / REST unreachable - export continues with the last save
+        }
+
+        return true;
     }
 
     public static function getNavigationLabel(): string
@@ -352,123 +242,21 @@ class PalworldPlayers extends Page implements HasTable
                     ->button()
                     ->outlined()
                     ->size(Size::Medium)
-                    ->visible(fn () => $this->palPlayers === null && $this->palExport === null
-                        && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false)
-                        && PalworldService::offlineLabel($this->getServer()) === null)
-                    ->action(function () {
-                        $id = uniqid();
-                        $this->paltoolsWrite(['id' => $id, 'action' => 'list']);
-                        $this->palExport = ['id' => $id, 'state' => 'listing', 'polls' => 0];
-                        // Replace this button action with the selection modal right
-                        // away - it shows a spinner until the watcher's roster
-                        // arrives. Pop ourselves off the mount stack first; the v5
-                        // replaceMountedTableAction() shim no longer does that.
-                        $this->unmountTableAction(false);
-                        $this->mountTableAction('export_pals_choose');
-                    }),
-                Action::make('export_pals_choose')
-                    ->label('Export Pals')
-                    ->icon(TablerIcon::Users)
-                    ->color('info')
-                    ->button()
-                    ->outlined()
-                    ->size(Size::Medium)
-                    ->visible(fn () => ($this->palPlayers !== null || ($this->palExport['state'] ?? null) === 'listing')
-                        && (user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false))
-                    // NOT disabled while listing: a disabled action refuses to mount
-                    // (mountAction pops it silently), and the modal must open with a
-                    // spinner while the roster loads
-                    ->disabled(fn () => ($this->palExport['state'] ?? null) === 'filtering')
+                    ->visible(fn () => user()?->can(SubuserPermission::FileReadContent, $this->getServer()) ?? false)
                     ->modalHeading('Export Pals')
-                    ->modalDescription('Produces a filtered Level.sav containing only the selected players\' / guilds\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Filtering runs on the game node; the download starts automatically when ready.')
+                    ->modalDescription('Produces a filtered Level.sav containing only the selected players\' / guilds\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Everything runs in your browser; the server only hands over the world save.')
                     ->closeModalByClickingAway(false)
-                    ->schema([
-                        Html::make(fn () => $this->palExportSpinner(
-                            'Reading world save on the node - this can take a moment on large worlds...'
-                        ))->visible(fn () => $this->palPlayers === null),
-                        Html::make(fn () => $this->palExportSpinner(
-                            'Filtering pals on the node (world save included) - the download starts when ready...'
-                        ))->visible(fn () => ($this->palExport['state'] ?? null) === 'filtering'),
-                        Tabs::make('selection')
-                            ->tabs([
-                                Tab::make('Players')->schema([
-                                    CheckboxList::make('players')
-                                        ->hiddenLabel()
-                                        ->helperText('Each player\'s own pals: party + palbox.')
-                                        ->options(fn () => collect($this->palPlayers ?? [])->mapWithKeys(
-                                            fn ($p) => [$p['uid'] => sprintf('%s (%d pals)', $p['name'], $p['pals'])]
-                                        )->all())
-                                        ->columns(2),
-                                ]),
-                                Tab::make('Guilds')->schema([
-                                    CheckboxList::make('guilds')
-                                        ->hiddenLabel()
-                                        ->helperText('Every member\'s own pals (party + palbox) of the guild.')
-                                        ->options(fn () => collect($this->palGuilds ?? [])->mapWithKeys(
-                                            fn ($g) => [$g['id'] => sprintf(
-                                                '%s (%d pals, %d at base)',
-                                                $g['name'] ?? substr((string) $g['id'], 0, 8),
-                                                max(0, ($g['pals'] ?? 0) - ($g['ownerless'] ?? 0)),
-                                                $g['base_pals'] ?? 0,
-                                            )]
-                                        )->all())
-                                        ->descriptions(fn () => collect($this->palGuilds ?? [])->mapWithKeys(
-                                            // Alpine toggle instead of <details>: the description
-                                            // sits inside the option <label>, so a plain click
-                                            // would also flip the checkbox - .prevent.stop keeps
-                                            // the collapse independent of the selection
-                                            fn ($g) => [$g['id'] => new HtmlString(sprintf(
-                                                '<span x-data="{open: false}">'
-                                                . '<button type="button" class="underline" x-on:click.prevent.stop="open = !open"'
-                                                . ' x-text="open ? \'%1$d members −\' : \'%1$d members +\'"></button>'
-                                                . ' <span x-show="open" x-cloak>%2$s</span></span>',
-                                                count($g['members'] ?? []),
-                                                e(implode(', ', $g['members'] ?? []) ?: '-'),
-                                            ))]
-                                        )->all()),
-                                ]),
-                            ])
-                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
-                        Toggle::make('include_base_pals')
-                            ->label('Include base pals - everything deployed at the selected players\' / guilds\' bases (also pals deployed by other guild members)')
-                            ->default(true)
-                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
-                        Toggle::make('save_first')
-                            ->label('Save world first (freshest data)')
-                            ->default(true)
-                            ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
-                    ])
-                    ->modalSubmitActionLabel('Export')
-                    ->modalSubmitAction(fn ($action) => $action->disabled($this->palPlayers === null || $this->palExport !== null))
-                    ->action(function (array $data, Action $action) {
-                        if ($this->palPlayers === null || $this->palExport !== null) {
-                            $action->halt(); // still loading/filtering - Export is disabled, this is just a guard
-                        }
-
-                        $players = array_values($data['players'] ?? []);
-                        $guilds = array_values($data['guilds'] ?? []);
-                        if ($players === [] && $guilds === []) {
-                            Notification::make()->title('Nothing selected')
-                                ->body('Pick at least one player or guild.')->warning()->send();
-                            $action->halt();
-                        }
-
-                        $id = uniqid();
-                        $this->paltoolsWrite([
-                            'id' => $id, 'action' => 'filter',
-                            'players' => $players,
-                            'guilds' => $guilds,
-                            'include_base_pals' => (bool) ($data['include_base_pals'] ?? true),
-                            'save_first' => (bool) ($data['save_first'] ?? true),
-                        ]);
-                        $this->palExport = ['id' => $id, 'state' => 'filtering', 'polls' => 0];
-
-                        // keep the modal open - it now shows the filtering status,
-                        // and checkPalExport() closes it when the download starts
-                        // (halt skips the render hooks, so force the repaint)
-                        $this->forceRender();
-                        $action->halt();
-                    }),
+                    ->modalContent(fn () => view('palworld-admin::components.pal-export-modal', [
+                        'savUrl' => route('palworld-admin.level-sav', ['server' => $this->getServer()->uuid_short]),
+                        'statUrl' => route('palworld-admin.level-sav.stat', ['server' => $this->getServer()->uuid_short]),
+                        'assetUrl' => route('palworld-admin.assets.palexport')
+                            . '?v=' . (string) @filemtime(dirname(__DIR__, 3) . '/resources/dist/palexport.js'),
+                        // world save only works while the game runs; skip it silently otherwise
+                        'canSave' => (user()?->can(SubuserPermission::ControlConsole, $this->getServer()) ?? false)
+                            && PalworldService::offlineLabel($this->getServer()) === null,
+                    ]))
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Close'),
                 Action::make('export_save')
                     ->label('Export save')
                     ->icon(TablerIcon::FileDownload)

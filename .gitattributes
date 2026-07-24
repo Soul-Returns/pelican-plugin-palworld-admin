@@ -6,3 +6,5 @@
 dev/ export-ignore
 CLAUDE.md export-ignore
 DEVELOPMENT.md export-ignore
+resources/ts/ export-ignore
+tsconfig.json export-ignore
