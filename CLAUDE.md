@@ -2,8 +2,9 @@
 
 Filament plugin for Pelican (pelican.dev, a Pterodactyl fork) that adds Palworld
 administration to the server (client) panel: live players (kick/ban/announce/save),
-a ban list backed by `banlist.txt` + a `palworld_bans` ledger table, and a
-`PalWorldSettings.ini` world-settings editor. Data comes from the official
+a ban list backed by `banlist.txt` + a `palworld_bans` ledger table, a
+`PalWorldSettings.ini` world-settings editor, and a client-side Pal export
+(filtered `Level.sav` produced entirely in the user's browser). Data comes from the official
 Palworld REST API (basic auth `admin:<ADMIN_PASSWORD>`, port from the
 `REST_API_PORT` egg variable) and from Wings file access.
 
@@ -26,6 +27,13 @@ for layout, `Filament\Forms\Components\*` for fields), Laravel 13, PHP 8.3+.
   salvage mode for corrupted files; keep round-trip tests green).
 - `src/Filament/Pages/` — the three pages. Views under `resources/views`
   are namespaced `palworld-admin::` automatically by the panel.
+- `resources/ts/` — browser-side Pal-export pipeline (TypeScript: .sav
+  container decompress/recompress incl. WASM Oodle, GVAS byte-surgery
+  filtering). `dev/build-assets.sh` bundles it (esbuild) into the COMMITTED
+  `resources/dist/palexport.js` served by the plugin's asset route — rebuild
+  and commit the bundle whenever `resources/ts/` changes. `dev/build-ooz.sh`
+  rebuilds the vendored WASM Oodle decompressor (`ooz.mjs`);
+  `dev/test-palexport.ts` is a node parity harness against real saves.
 - `database/migrations/` — run by the panel's install/update job, or
   `php artisan migrate --force` for git-based installs.
 
