@@ -256,7 +256,9 @@ class PalworldPlayers extends Page implements HasTable
                             && PalworldService::offlineLabel($this->getServer()) === null,
                     ]))
                     ->modalSubmitAction(false)
-                    ->modalCancelActionLabel('Close'),
+                    // the modal view renders its own Close so it can share a
+                    // row with the Export button
+                    ->modalCancelAction(false),
                 Action::make('export_save')
                     ->label('Export save')
                     ->icon(TablerIcon::FileDownload)

@@ -131,6 +131,26 @@
 
         async doExport() {
             if (!this.canExport() || this.phase !== 'select') return;
+
+            // Tools like palbreed.com only accept the exact filename
+            // 'Level.sav', but repeat downloads get renamed to 'Level (2).sav'.
+            // Where available (Chromium), a real save dialog with the name
+            // pre-filled lets the user overwrite the previous export instead.
+            // The picker must open NOW, while the click's user activation is
+            // still valid - filtering first would let it expire.
+            let handle = null;
+            if (window.showSaveFilePicker) {
+                try {
+                    handle = await window.showSaveFilePicker({
+                        suggestedName: 'Level.sav',
+                        types: [{ description: 'Palworld save', accept: { 'application/octet-stream': ['.sav'] } }],
+                    });
+                } catch (e) {
+                    if (e?.name === 'AbortError') return; // user cancelled the dialog
+                    // any other failure: fall back to a classic download below
+                }
+            }
+
             this.phase = 'filter';
             this.progress = 'Filtering pals in your browser...';
             try {
@@ -139,18 +159,38 @@
                     guilds: this.selectedGuilds(),
                     includeBasePals: this.includeBasePals,
                 });
-                const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'Level.filtered.sav';
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 60000);
+                if (handle) {
+                    const writable = await handle.createWritable();
+                    await writable.write(bytes);
+                    await writable.close();
+                } else {
+                    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'Level.sav';
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                }
                 this.phase = 'select';
                 this.progress = '';
             } catch (e) {
                 this.error = e?.message ?? String(e);
                 this.phase = 'error';
             }
+        },
+
+        // Open palbreed in a named tab: a second click focuses the existing
+        // tab WITHOUT reloading it (a reload would drop the imported save).
+        openPalbreed() {
+            const url = 'https://palbreed.com/breeding-path';
+            const w = window.open('', 'palbreed');
+            if (!w) { window.open(url, '_blank'); return; } // popup blocked
+            try {
+                // brand-new (about:blank) tab -> navigate it; reading href on
+                // an already-navigated tab throws (cross-origin) = leave as is
+                if (w.location.href === 'about:blank') w.location = url;
+            } catch { /* tab already on palbreed - just focus it */ }
+            w.focus();
         },
     }"
     class="fi-fo-component-ctn"
@@ -221,12 +261,28 @@
                 <input type="checkbox" class="fi-checkbox-input" x-model="includeBasePals" />
                 <span>Include base pals - everything deployed at the selected players' / guilds' bases (also pals deployed by other guild members)</span>
             </label>
+        </div>
+    </template>
 
-            <div style="display:flex;justify-content:flex-end;">
+    {{-- footer: our own Close (Filament's cancel button is disabled so both
+         buttons share one row); close() comes from the parent modal's Alpine scope --}}
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">
+        <x-filament::button color="gray" x-on:click="close()">
+            Close
+        </x-filament::button>
+        {{-- x-show clobbers an inline display:flex when re-showing, so the
+             flex column lives on an inner div --}}
+        <div x-show="phase === 'select' || phase === 'filter'">
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.375rem;">
                 <x-filament::button color="info" x-on:click="doExport()" x-bind:disabled="!canExport() || phase === 'filter'">
                     Export
                 </x-filament::button>
+                <a href="https://palbreed.com/breeding-path" target="palbreed"
+                    x-on:click.prevent="openPalbreed()"
+                    style="font-size:.75rem;color:#9ca3af;text-decoration:underline;">
+                    Open palbreed.com &#8599;
+                </a>
             </div>
         </div>
-    </template>
+    </div>
 </div>
