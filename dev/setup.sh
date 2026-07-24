@@ -280,6 +280,10 @@ if ! compose exec -T panel grep -q '^APP_INSTALLED=true' /pelican-data/.env; the
     artisan migrate --force >/dev/null
     compose exec -T panel sed -i 's/^APP_INSTALLED=false/APP_INSTALLED=true/' /pelican-data/.env
 fi
+# With APP_INSTALLED=true the entrypoint waits for an external database unless
+# .env says DB_CONNECTION=sqlite (the installer never writes it - sqlite is
+# only the framework default), hanging forever on any container restart.
+compose exec -T panel sh -c 'grep -q "^DB_CONNECTION=" /pelican-data/.env || echo "DB_CONNECTION=sqlite" >> /pelican-data/.env'
 
 echo -n "==> waiting for panel"
 ready=0
