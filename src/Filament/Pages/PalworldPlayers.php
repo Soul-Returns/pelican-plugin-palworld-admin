@@ -18,6 +18,8 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Html;
+use Filament\Schemas\Components\Tabs;
+use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Support\Enums\Size;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\HtmlString;
@@ -51,6 +53,9 @@ class PalworldPlayers extends Page implements HasTable
 
     /** Roster from the watcher's players.json (uid/name/pals/group_id). */
     public ?array $palPlayers = null;
+
+    /** Guilds from the watcher's players.json (id/members/pals/ownerless/base_pals). */
+    public ?array $palGuilds = null;
 
     protected function paltoolsWrite(array $request): void
     {
@@ -113,6 +118,7 @@ class PalworldPlayers extends Page implements HasTable
             // The selection modal is already open (mounted on click) and shows a
             // spinner while $palPlayers is null - setting it swaps in the list.
             $this->palPlayers = $roster['players'] ?? [];
+            $this->palGuilds = $roster['guilds'] ?? [];
 
             // poll responses are partial renders while a modal is open - without
             // this the modal keeps showing the spinner and the page the banner
@@ -373,8 +379,8 @@ class PalworldPlayers extends Page implements HasTable
                     // (mountAction pops it silently), and the modal must open with a
                     // spinner while the roster loads
                     ->disabled(fn () => ($this->palExport['state'] ?? null) === 'filtering')
-                    ->modalHeading('Export selected players\' Pals')
-                    ->modalDescription('Produces a filtered Level.sav containing only the selected players\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Filtering runs on the game node; the download starts automatically when ready.')
+                    ->modalHeading('Export Pals')
+                    ->modalDescription('Produces a filtered Level.sav containing only the selected players\' / guilds\' Pals - e.g. for palbreed.com ("Choose Level.sav instead"). Filtering runs on the game node; the download starts automatically when ready.')
                     ->closeModalByClickingAway(false)
                     ->schema([
                         Html::make(fn () => $this->palExportSpinner(
@@ -383,16 +389,49 @@ class PalworldPlayers extends Page implements HasTable
                         Html::make(fn () => $this->palExportSpinner(
                             'Filtering pals on the node (world save included) - the download starts when ready...'
                         ))->visible(fn () => ($this->palExport['state'] ?? null) === 'filtering'),
-                        CheckboxList::make('players')
-                            ->label('Players')
-                            ->required()
-                            ->options(fn () => collect($this->palPlayers ?? [])->mapWithKeys(
-                                fn ($p) => [$p['uid'] => sprintf('%s (%d pals)', $p['name'], $p['pals'])]
-                            )->all())
-                            ->columns(2)
+                        Tabs::make('selection')
+                            ->tabs([
+                                Tab::make('Players')->schema([
+                                    CheckboxList::make('players')
+                                        ->hiddenLabel()
+                                        ->helperText('Each player\'s own pals: party + palbox.')
+                                        ->options(fn () => collect($this->palPlayers ?? [])->mapWithKeys(
+                                            fn ($p) => [$p['uid'] => sprintf('%s (%d pals)', $p['name'], $p['pals'])]
+                                        )->all())
+                                        ->columns(2),
+                                ]),
+                                Tab::make('Guilds')->schema([
+                                    CheckboxList::make('guilds')
+                                        ->hiddenLabel()
+                                        ->helperText('Every member\'s own pals (party + palbox) of the guild.')
+                                        ->options(fn () => collect($this->palGuilds ?? [])->mapWithKeys(
+                                            fn ($g) => [$g['id'] => sprintf(
+                                                '%s (%d pals, %d at base)',
+                                                $g['name'] ?? substr((string) $g['id'], 0, 8),
+                                                max(0, ($g['pals'] ?? 0) - ($g['ownerless'] ?? 0)),
+                                                $g['base_pals'] ?? 0,
+                                            )]
+                                        )->all())
+                                        ->descriptions(fn () => collect($this->palGuilds ?? [])->mapWithKeys(
+                                            // Alpine toggle instead of <details>: the description
+                                            // sits inside the option <label>, so a plain click
+                                            // would also flip the checkbox - .prevent.stop keeps
+                                            // the collapse independent of the selection
+                                            fn ($g) => [$g['id'] => new HtmlString(sprintf(
+                                                '<span x-data="{open: false}">'
+                                                . '<button type="button" class="underline" x-on:click.prevent.stop="open = !open"'
+                                                . ' x-text="open ? \'%1$d members −\' : \'%1$d members +\'"></button>'
+                                                . ' <span x-show="open" x-cloak>%2$s</span></span>',
+                                                count($g['members'] ?? []),
+                                                e(implode(', ', $g['members'] ?? []) ?: '-'),
+                                            ))]
+                                        )->all()),
+                                ]),
+                            ])
                             ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
-                        Toggle::make('whole_guild')
-                            ->label('Whole guild(s) of the selected players - includes shared base pals')
+                        Toggle::make('include_base_pals')
+                            ->label('Include base pals - everything deployed at the selected players\' / guilds\' bases (also pals deployed by other guild members)')
+                            ->default(true)
                             ->visible(fn () => $this->palPlayers !== null && ($this->palExport['state'] ?? null) !== 'filtering'),
                         Toggle::make('save_first')
                             ->label('Save world first (freshest data)')
@@ -406,11 +445,20 @@ class PalworldPlayers extends Page implements HasTable
                             $action->halt(); // still loading/filtering - Export is disabled, this is just a guard
                         }
 
+                        $players = array_values($data['players'] ?? []);
+                        $guilds = array_values($data['guilds'] ?? []);
+                        if ($players === [] && $guilds === []) {
+                            Notification::make()->title('Nothing selected')
+                                ->body('Pick at least one player or guild.')->warning()->send();
+                            $action->halt();
+                        }
+
                         $id = uniqid();
-                        $key = ($data['whole_guild'] ?? false) ? 'guilds_of' : 'players';
                         $this->paltoolsWrite([
                             'id' => $id, 'action' => 'filter',
-                            $key => array_values($data['players'] ?? []),
+                            'players' => $players,
+                            'guilds' => $guilds,
+                            'include_base_pals' => (bool) ($data['include_base_pals'] ?? true),
                             'save_first' => (bool) ($data['save_first'] ?? true),
                         ]);
                         $this->palExport = ['id' => $id, 'state' => 'filtering', 'polls' => 0];
