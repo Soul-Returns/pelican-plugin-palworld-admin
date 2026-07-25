@@ -63,6 +63,14 @@ class PalworldWorldSettings extends ServerFormPage
     public ?array $defaults = null;
 
     /**
+     * True when the active world contains a WorldOption.sav: the game then
+     * takes most world settings from that file instead of the ini AND rewrites
+     * the OptionSettings tuple from it on shutdown, silently dropping every
+     * key the (usually older) .sav does not contain. Null = could not check.
+     */
+    public ?bool $worldOptionSav = null;
+
+    /**
      * @return array<string, string> world-configuration defaults (managed keys excluded)
      *
      * @throws \Exception when the defaults file cannot be read
@@ -92,10 +100,7 @@ class PalworldWorldSettings extends ServerFormPage
             return;
         }
 
-        cache()->forget("servers.{$this->getRecord()->uuid}.status");
-        $this->serverStopped = null;
-
-        $stopped = $this->serverStopped();
+        $stopped = $this->serverStoppedFresh();
 
         if (($this->awaitingTarget === 'stopped') === $stopped) {
             $this->awaitingTarget = null;
@@ -132,13 +137,31 @@ class PalworldWorldSettings extends ServerFormPage
     {
         return $this->serverStopped ??= (function (): bool {
             try {
-                return in_array($this->getRecord()->retrieveStatus(), [
-                    ContainerStatus::Offline, ContainerStatus::Exited, ContainerStatus::Dead,
-                ], true);
+                $status = $this->getRecord()->retrieveStatus();
             } catch (\Exception) {
-                return false;
+                // Wings unreachable: fail open. A spurious lock mid-edit loses
+                // the user's unsaved work; a file write would fail on its own.
+                return true;
             }
+
+            // Only an affirmatively running-ish state locks the form. Missing
+            // covers wings hiccups (the status call has a 1s timeout and the
+            // result is cached 15s) and treating it as "running" used to flip
+            // the page read-only mid-edit. save() re-verifies uncached.
+            return !in_array($status, [
+                ContainerStatus::Starting, ContainerStatus::Running, ContainerStatus::Restarting,
+                ContainerStatus::Stopping, ContainerStatus::Paused,
+            ], true);
         })();
+    }
+
+    /** Uncached serverStopped() - the check that gates an actual file write. */
+    protected function serverStoppedFresh(): bool
+    {
+        cache()->forget("servers.{$this->getRecord()->uuid}.status");
+        $this->serverStopped = null;
+
+        return $this->serverStopped();
     }
 
     protected function canEdit(): bool
@@ -194,6 +217,33 @@ class PalworldWorldSettings extends ServerFormPage
             $this->defaults(); // preload so per-row reset buttons can dim when already at default
         } catch (\Exception) {
             // defaults file unreadable - reset buttons stay active, reset-all reports the error
+        }
+
+        $this->detectWorldOptionSav();
+    }
+
+    /**
+     * Checked on every form (re)fill, NOT on every Livewire render - the
+     * result lives in a public property so field blurs stay cheap.
+     */
+    protected function detectWorldOptionSav(): void
+    {
+        try {
+            $localSettings = $this->fileRepository()->getContent(
+                'Pal/Saved/Config/LinuxServer/GameUserSettings.ini',
+                config('panel.files.max_edit_size'),
+            );
+
+            if (!preg_match('/^DedicatedServerName=([0-9A-Fa-f]+)/m', $localSettings, $m)) {
+                $this->worldOptionSav = null; // no world created yet
+
+                return;
+            }
+
+            $this->worldOptionSav = collect($this->fileRepository()->getDirectory("Pal/Saved/SaveGames/0/{$m[1]}"))
+                ->contains(fn ($entry) => ($entry['name'] ?? null) === 'WorldOption.sav');
+        } catch (\Exception) {
+            $this->worldOptionSav = null;
         }
     }
 
@@ -278,6 +328,39 @@ class PalworldWorldSettings extends ServerFormPage
                     $this->data['options'][$key] = trim((string) ($data['value'] ?? ''));
 
                     Notification::make()->title("{$key} added")->body('Use "Save to file" to persist it.')->success()->send();
+                }),
+            Action::make("add_missing{$suffix}")
+                ->button()
+                ->outlined()
+                ->size(Size::Medium)
+                ->label('Add missing settings')
+                ->icon(TablerIcon::PlaylistAdd)
+                ->color('gray')
+                ->visible(fn () => $this->canEdit())
+                ->action(function () {
+                    try {
+                        $defaults = $this->defaults();
+                    } catch (\Exception $e) {
+                        Notification::make()->title('Could not read ' . config('palworld-admin.defaults_path'))->body($e->getMessage())->danger()->send();
+
+                        return;
+                    }
+
+                    $missing = array_diff_key($defaults, (array) ($this->data['options'] ?? []));
+
+                    if ($missing === []) {
+                        Notification::make()->title('Nothing missing')->body('Every game default is already in the file.')->success()->send();
+
+                        return;
+                    }
+
+                    $this->data['options'] = array_merge((array) ($this->data['options'] ?? []), $missing);
+
+                    Notification::make()
+                        ->title(count($missing) . ' missing ' . (count($missing) === 1 ? 'setting' : 'settings') . ' added with game defaults')
+                        ->body('Existing values are untouched. Use "Save to file" to persist.')
+                        ->success()
+                        ->send();
                 }),
             Action::make("reset_all{$suffix}")
                 ->button()
@@ -424,7 +507,7 @@ class PalworldWorldSettings extends ServerFormPage
 
         abort_unless(user()?->can(SubuserPermission::FileUpdate, $server), 403);
 
-        if (!$this->serverStopped()) {
+        if (!$this->serverStoppedFresh()) {
             Notification::make()
                 ->title('Stop the server before saving')
                 ->body('Palworld overwrites the settings file on shutdown - changes saved while it runs would be lost.')
@@ -492,7 +575,7 @@ class PalworldWorldSettings extends ServerFormPage
     {
         abort_unless(user()?->can(SubuserPermission::FileUpdate, $this->getRecord()), 403);
 
-        if (!$this->serverStopped()) {
+        if (!$this->serverStoppedFresh()) {
             return;
         }
 
@@ -527,6 +610,13 @@ class PalworldWorldSettings extends ServerFormPage
 
     private function persist(string $ini, OptionSettings $options, array $merged): void
     {
+        // The game's tuple reader stops at the FIRST ')' in the line: a nested
+        // value like CrossplayPlatforms=(Steam,...) ends the parse and every
+        // key after it is silently dropped on the next boot (the game itself
+        // always writes such keys last). Keep parenthesized values at the end.
+        $nested = array_filter($merged, fn ($v) => str_starts_with(trim((string) $v), '('));
+        $merged = array_diff_key($merged, $nested) + $nested;
+
         try {
             $options->replaceValues($merged);
 
