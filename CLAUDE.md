@@ -56,6 +56,27 @@ for layout, `Filament\Forms\Components\*` for fields), Laravel 13, PHP 8.3+.
 - Palworld writes its in-memory settings back to `PalWorldSettings.ini` on
   shutdown — editing the file is only valid while the server is fully stopped
   (hence the settings page's stop→edit→save→start flow).
+- The game's OptionSettings reader stops at the FIRST `)` in the line: a
+  nested value like `CrossplayPlatforms=(Steam,Xbox,PS5,Mac)` terminates the
+  parse and every key after it is silently ignored, then stripped by the
+  game's boot-time file rewrite (in-memory: C++ defaults). The game itself
+  always writes such keys last; `DefaultPalWorldSettings.ini` has crossplay
+  mid-line, so any defaults-ordered write loses the 37 keys after it (incl.
+  `bAllowGlobalPalboxImport`). persist() therefore reorders parenthesized
+  values to the end of the tuple. Verified empirically on build 24181105
+  (boot + REST /v1/api/settings). NOT the config parser's fault (tested).
+- If the world has a `WorldOption.sav` (`SaveGames/0/<world>/`), the game takes
+  most world settings from IT instead of the ini — same vanishing-keys symptom
+  as above. The settings page detects the file and shows a warning banner; the
+  fix is deleting it while stopped.
+- The game rewrites `PalWorldSettings.ini` at BOOT (with only the keys it
+  parsed) as well as at shutdown — "keys gone right after start" points at a
+  parse truncation, not at the shutdown write-back.
+- `Server::retrieveStatus()` returns `Missing` on ANY wings hiccup (the call
+  has a 1s timeout, result cached 15s) and can throw. Never map "not in the
+  stopped list" to "running" — that flipped the settings form read-only
+  mid-edit. Lock only on affirmative running-ish states, fail open otherwise,
+  and re-check uncached (`serverStoppedFresh()`) before any file write.
 - The egg's config parser tool only UPDATES ini keys that already exist
   ("Key not found" = skipped) and corrupts the tuple when a value contains
   `)` — the egg guards `SERVER_NAME`/`SERVER_DESCRIPTION` against `" ( )`.
