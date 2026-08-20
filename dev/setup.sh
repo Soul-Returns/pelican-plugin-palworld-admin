@@ -7,6 +7,7 @@
 #   ./dev/setup.sh --egg <file.yaml>    import a real Palworld egg instead of
 #                                       the bundled placeholder
 #   PANEL_PORT=8890 ./dev/setup.sh      use another port (default 8888)
+#   PANEL_VERSION=1.0.0-beta38 ./dev/setup.sh   pin another panel build
 #
 # Creates dev/stack/ (gitignored) with a docker compose project "palworld-admin-dev":
 # panel on localhost:$PANEL_PORT with THIS CHECKOUT bind-mounted as the live
@@ -16,6 +17,9 @@
 set -euo pipefail
 
 PANEL_PORT="${PANEL_PORT:-8888}"
+# pinned: plugin.json panel_version is a STRICT match, so a newer panel
+# refuses to install the plugin. Bump both together.
+PANEL_VERSION="${PANEL_VERSION:-1.0.0-beta35}"
 WITH_WINGS=0
 EGG_FILE=""
 
@@ -45,7 +49,7 @@ name: palworld-admin-dev
 
 services:
   panel:
-    image: ghcr.io/pelican-dev/panel:latest
+    image: ghcr.io/pelican/panel:${PANEL_VERSION}
     restart: unless-stopped
     ports:
       - "${PANEL_PORT}:80"
@@ -65,7 +69,7 @@ services:
       MAIL_DRIVER: "log"
 
   wings:
-    image: ghcr.io/pelican-dev/wings:latest
+    image: ghcr.io/pelican/wings:latest
     restart: unless-stopped
     profiles: ["wings"]
     ports:
