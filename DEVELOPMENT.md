@@ -28,7 +28,7 @@ To develop against your real egg instead of the placeholder:
 ./dev/setup.sh --egg /path/to/egg-palworld.yaml
 ```
 
-## Faking the game (no 5 GB install needed)
+## Faking the game (no 7 GB install needed)
 
 ```sh
 python3 dev/mock-palworld-api.py
@@ -47,7 +47,7 @@ running a real server — both want port 8212.
 
 Adds a Wings container wired to the panel (`remote: http://panel`, browser
 websocket origin allowed). Then press **Reinstall** on the dev server in the
-panel (with a real egg imported via `--egg`) — that downloads ~5 GB of server
+panel (with a real egg imported via `--egg`) — that downloads ~7 GB of server
 files — and start it. Game reachable at `localhost:8211` (UDP).
 
 Only one wings per host: it owns `/etc/pelican` + `/var/lib/pelican`, so don't
