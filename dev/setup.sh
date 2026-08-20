@@ -337,6 +337,80 @@ if [ "${WITH_WINGS}" = "1" ]; then
     sudo cp "${STACK_DIR}/wings-config.yml" /etc/pelican/config.yml
     compose --profile wings up -d wings
     echo "    wings up - reinstall the dev server in the panel to provision it"
+
+    # ------------------------------------------------------- connectivity probe
+    # Two host-level prerequisites are easy to miss, and both present identically:
+    # a dead node in the panel (red heart / red globe) with nothing useful in any
+    # log, because the packets are dropped rather than refused.
+    #
+    #   1. ufw defaults to deny-incoming, which drops container -> host traffic,
+    #      so the panel cannot reach wings on the host gateway. Shows as a TIMEOUT.
+    #   2. host.docker.internal does not resolve on the host, so the browser
+    #      cannot open the server console websocket (the panel backend is fine -
+    #      it gets the name injected into the container by docker).
+    #
+    # Neither is tracked by chezmoi, so every fresh machine hits both. This warns
+    # rather than exiting: the panel and plugin dev work without wings, and this
+    # script is a Clyde stack.up, so a non-zero exit would report the whole stack
+    # as failed. Change the final block to `exit 1` if you want it fatal.
+    #
+    # Ports are hardcoded in the compose mappings and the node seed above; keep
+    # these two in sync with them.
+    WINGS_PORT=8889
+    WINGS_SFTP_PORT=2022
+
+    printf '    waiting for wings on :%s ' "${WINGS_PORT}"
+    wings_up=0
+    for _ in $(seq 1 15); do
+        # any HTTP response counts - /api/system 401s without a token
+        if curl -s -o /dev/null -m 2 "http://127.0.0.1:${WINGS_PORT}/api/system"; then
+            wings_up=1
+            break
+        fi
+        printf '.'
+        sleep 1
+    done
+    echo
+
+    problems=0
+
+    if [ "${wings_up}" != "1" ]; then
+        echo "!!  wings is not answering on 127.0.0.1:${WINGS_PORT}" >&2
+        echo "!!  check: docker compose --project-directory ${STACK_DIR} logs wings" >&2
+        problems=1
+    elif ! compose exec -T panel curl -s -o /dev/null -m 5 \
+            "http://host.docker.internal:${WINGS_PORT}/api/system"; then
+        cat >&2 <<MSG
+!!  The panel container cannot reach wings on the host gateway.
+!!  This is almost always the host firewall dropping container -> host
+!!  packets (ufw defaults to deny incoming). Fix:
+!!
+!!      sudo ufw allow from 172.16.0.0/12 to any port ${WINGS_PORT} proto tcp
+!!      sudo ufw allow from 172.16.0.0/12 to any port ${WINGS_SFTP_PORT} proto tcp
+!!
+!!  172.16.0.0/12 is docker's whole private range on purpose - a rule
+!!  naming this compose network's subnet breaks after a 'down -v'.
+MSG
+        problems=1
+    fi
+
+    if ! getent hosts host.docker.internal >/dev/null; then
+        cat >&2 <<MSG
+!!  host.docker.internal does not resolve on this host, so the browser
+!!  cannot reach the server console websocket. Fix:
+!!
+!!      echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+!!
+!!  Containers are unaffected - docker injects its own entry for them.
+MSG
+        problems=1
+    fi
+
+    if [ "${problems}" = "1" ]; then
+        echo "!!  The node will show as unreachable in the panel until the above is fixed." >&2
+    else
+        echo "    wings reachable from panel and host - node should come up green"
+    fi
 fi
 
 cat <<EOF
